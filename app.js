@@ -1,5 +1,7 @@
+import { isSameMapPlace, loadTakeoutCsv, mapLink, normalized, planTakeout } from "./maps-import.mjs";
+
 const $ = (selector) => document.querySelector(selector);
-const categories = { cafe: "カフェ", food: "ごはん", sweet: "スイーツ" };
+const categories = { cafe: "カフェ", food: "ごはん", sweet: "スイーツ", other: "未分類" };
 const samples = [
   { id: "sample-cafe", category: "cafe", name: "喫茶ひだまり", area: "駅前", note: "窓辺の席で、ラテと焼きたてのクロワッサン。" },
   { id: "sample-food", category: "food", name: "洋食キッチン こむぎ", area: "商店街", note: "ふわとろオムライスを食べたい日に。" },
@@ -12,10 +14,13 @@ const maximumTokenLength = 7500;
 
 const state = readState();
 let activeCategory = "all";
+let visibleLimit = 48;
 let editingId = null;
 let drawnId = null;
 let shared = null;
 let toastTimer;
+let mapImport = null;
+let fileRead = 0;
 
 function cleaned(value, maxLength) {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
@@ -35,14 +40,24 @@ function safeUrl(value) {
 
 function cleanShop(value) {
   if (!value || typeof value !== "object") return null;
-  const name = cleaned(value.name, 80);
+  const name = cleaned(value.name, 256);
   const id = cleaned(value.id, 90);
   if (!name || !id || !Object.hasOwn(categories, value.category)) return null;
+  const mapEntries = Array.isArray(value.mapEntries) ? value.mapEntries.filter((entry) =>
+    entry && typeof entry.source === "string" && typeof entry.key === "string" && typeof entry.note === "string",
+  ).map((entry) => ({
+    source: cleaned(entry.source, 120),
+    key: cleaned(entry.key, 1600),
+    note: cleaned(entry.note, 2000),
+  })) : [];
   return {
     id, name, category: value.category,
     area: cleaned(value.area, 50),
     note: cleaned(value.note, 140),
     url: safeUrl(value.url),
+    mapUrl: mapLink(value.mapUrl),
+    mapEntries,
+    mapKeys: Array.isArray(value.mapKeys) ? value.mapKeys.filter((key) => typeof key === "string" && key.length <= 1200) : [],
   };
 }
 
@@ -54,9 +69,11 @@ function readState() {
     // Start with the sample list when browser storage is unavailable or invalid.
   }
   const shops = Array.isArray(saved.shops) ? saved.shops.map(cleanShop).filter((shop) => shop && !sampleById.has(shop.id)) : [];
+  const trash = Array.isArray(saved.trash) ? saved.trash.map(cleanShop).filter((shop) => shop && !sampleById.has(shop.id)) : [];
+  const mapLists = Array.isArray(saved.mapLists) ? saved.mapLists.map((name) => cleaned(name, 120)).filter(Boolean) : [];
   const ids = new Set([...shops, ...samples].map((shop) => shop.id));
   const selected = Array.isArray(saved.selected) ? [...new Set(saved.selected.filter((id) => ids.has(id)))] : [];
-  return { shops, selected, hideSamples: saved.hideSamples === true };
+  return { shops, selected, trash, mapLists, hideSamples: saved.hideSamples === true };
 }
 
 function saveState(message = "") {
@@ -66,6 +83,16 @@ function saveState(message = "") {
   } catch {
     notify("このブラウザに保存できませんでした。変更はこの画面を開いている間だけ有効です。");
   }
+}
+
+function replaceStoredState(next) {
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(next));
+  } catch {
+    return false;
+  }
+  Object.assign(state, next);
+  return true;
 }
 
 function notify(message) {
@@ -118,9 +145,11 @@ function normal(value) {
 function filteredShops() {
   const shops = state.hideSamples ? state.shops : [...state.shops, ...samples];
   const words = normal($("#search").value.trim()).split(/\s+/);
+  const source = $("#maps-list-filter").value;
   return shops.filter((shop) => {
     const searchable = normal([shop.name, shop.area, shop.note, categories[shop.category]].join(" "));
     return (activeCategory === "all" || shop.category === activeCategory)
+      && (!source || shop.mapEntries?.some((entry) => entry.source === source))
       && words.every((word) => searchable.includes(word));
   });
 }
@@ -135,10 +164,10 @@ function photo(shop) {
     image.height = 426;
     frame.append(image, element("span", "sample-label", "サンプル"));
   } else {
-    frame.append(icon(shop.category));
+    frame.append(icon(shop.category === "other" ? "pin" : shop.category));
   }
   const category = element("span", "category-pill");
-  category.append(icon(shop.category), categories[shop.category]);
+  category.append(icon(shop.category === "other" ? "pin" : shop.category), categories[shop.category]);
   frame.append(category);
   return frame;
 }
@@ -171,16 +200,26 @@ function shopCard(shop, mode = "local") {
 }
 
 function renderHome() {
+  const listFilter = $("#maps-list-filter");
+  const previousSource = listFilter.value;
+  if (listFilter.options.length !== state.mapLists.length + 1
+    || state.mapLists.some((name, index) => listFilter.options[index + 1]?.value !== name)) {
+    listFilter.replaceChildren(new Option("すべてのリスト", ""), ...state.mapLists.map((name) => new Option(name, name)));
+    listFilter.value = state.mapLists.includes(previousSource) ? previousSource : "";
+  }
+  listFilter.hidden = state.mapLists.length === 0;
+  $('[data-category="other"]').hidden = activeCategory !== "other" && !state.shops.some((shop) => shop.category === "other");
   const visible = filteredShops();
   $("#shop-total").textContent = visible.length + "件";
   $("#toggle-samples").textContent = state.hideSamples ? "サンプルを表示" : "サンプルを隠す";
-  $("#shop-cards").replaceChildren(...visible.map((shop) => shopCard(shop)));
+  $("#shop-cards").replaceChildren(...visible.slice(0, visibleLimit).map((shop) => shopCard(shop)));
+  $("#show-more").hidden = visible.length <= visibleLimit;
   const empty = $("#empty-list");
   empty.hidden = visible.length !== 0;
   empty.replaceChildren();
   $("#shuffle").disabled = visible.length === 0;
   if (!empty.hidden) {
-    const hasFilter = activeCategory !== "all" || $("#search").value.trim();
+    const hasFilter = activeCategory !== "all" || listFilter.value || $("#search").value.trim();
     empty.append(element("p", "", hasFilter ? "条件に合うお店がありません。" : "気になるお店を1枚追加してみよう。"));
     empty.append(hasFilter
       ? action("絞り込みをリセット", "reset-filter", "", "button button-outline")
@@ -201,7 +240,7 @@ function renderDeck() {
     label.append(element("small", "", [categories[shop.category], shop.area].filter(Boolean).join(" · ")));
     const remove = action("", "remove-pick", shop.id, "icon-button", "close");
     remove.setAttribute("aria-label", shop.name + "をデッキから外す");
-    item.append(icon(shop.category), label, remove);
+    item.append(icon(shop.category === "other" ? "pin" : shop.category), label, remove);
     return item;
   });
   $("#deck-list").replaceChildren(...nodes);
@@ -237,6 +276,8 @@ function openEditor(shop) {
 
 function resetFilters() {
   activeCategory = "all";
+  visibleLimit = 48;
+  $("#maps-list-filter").value = "";
   $("#search").value = "";
   document.querySelectorAll("[data-category]").forEach((button) => {
     button.setAttribute("aria-pressed", String(button.dataset.category === "all"));
@@ -251,6 +292,20 @@ function openDetails(shop, fromShare) {
   content.replaceChildren(photo(shop));
   if (shop.area) content.append(areaLabel(shop.area));
   if (shop.note) content.append(element("p", "card-note", shop.note));
+  if (!fromShare && shop.mapEntries?.length) {
+    const sources = element("div", "maps-sources");
+    sources.append(element("p", "muted", shop.mapEntries.map((entry) => entry.source).join(" / ")));
+    const notes = shop.mapEntries.filter((entry) => entry.note);
+    if (notes.length) {
+      const privateNotes = element("details");
+      privateNotes.append(element("summary", "", "Google マップのメモ（自分用）"));
+      for (const { source, note } of notes) {
+        privateNotes.append(element("strong", "", source), element("p", "card-note", note));
+      }
+      sources.append(privateNotes);
+    }
+    content.append(sources);
+  }
 
   const actions = element("div", "dialog-actions");
   if (!isSample && !fromShare) {
@@ -258,13 +313,18 @@ function openDetails(shop, fromShare) {
     actions.append(action("編集", "edit", shop.id, "button button-outline", "edit"));
   }
   if (!isSample) {
-    const label = shop.url ? "お店のリンクを開く" : "Google マップで検索";
-    const link = element("a", "button button-primary");
-    link.append(icon("pin"), label);
-    link.href = shop.url || "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent([shop.name, shop.area].filter(Boolean).join(" "));
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    actions.append(link);
+    const links = [];
+    if (shop.url && shop.url !== shop.mapUrl) links.push(["お店のリンクを開く", shop.url]);
+    if (shop.mapUrl) links.push(["Google マップで開く", shop.mapUrl]);
+    if (!links.length) links.push(["Google マップで検索", "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent([shop.name, shop.area].filter(Boolean).join(" "))]);
+    for (const [label, url] of links) {
+      const link = element("a", "button button-primary");
+      link.append(icon("pin"), label);
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      actions.append(link);
+    }
   }
   content.append(actions);
   openDialog($("#details"));
@@ -295,7 +355,7 @@ function drawOne(source) {
 function encodeDeck(shops) {
   const payload = shops.map((shop) => sampleById.has(shop.id)
     ? [shop.id]
-    : [shop.id, shop.name, shop.category, shop.area, shop.note, shop.url]);
+    : [shop.id, shop.name, shop.category, shop.area, shop.note, shop.url, shop.mapUrl || ""]);
   const bytes = new TextEncoder().encode(JSON.stringify([1, payload]));
   // Convert each byte independently so even a large local deck can be checked without a call-stack overflow.
   return btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""))
@@ -311,10 +371,10 @@ function decodeDeck(token) {
     if (version !== 1 || !Array.isArray(rows) || rows.length === 0) return null;
     const shops = rows.map((row) => {
       if (!Array.isArray(row)) return null;
-      const [id, name, category, area, note, url] = row;
+      const [id, name, category, area, note, url, mapUrl] = row;
       if (row.length === 1) return sampleById.get(id) ?? null;
       if (sampleById.has(id)) return null;
-      return cleanShop({ id, name, category, area, note, url });
+      return cleanShop({ id, name, category, area, note, url, mapUrl });
     });
     const ids = new Set(shops.map((shop) => shop?.id));
     return shops.every(Boolean) && ids.size === shops.length ? shops : null;
@@ -351,6 +411,7 @@ async function copyDeck() {
 }
 
 function showLocation() {
+  document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
   const wantsShare = location.hash.startsWith(sharePrefix);
   shared = wantsShare ? decodeDeck(location.hash.slice(sharePrefix.length)) : null;
   $("#shared-view").hidden = !wantsShare;
@@ -363,15 +424,17 @@ function showLocation() {
 
 function importShared() {
   if (!shared) return;
-  const matches = (left, right) => normal(left.name) === normal(right.name)
+  const matches = (left, right) => isSameMapPlace(left, right) || (normal(left.name) === normal(right.name)
     && normal(left.area) === normal(right.area)
-    && left.url === right.url;
+    && left.url === right.url
+    && left.mapUrl === right.mapUrl);
   let added = 0;
   for (const shop of shared) {
     if (sampleById.has(shop.id)) {
       state.hideSamples = false;
       continue;
     }
+    if (state.trash.some((removed) => removed.id === shop.id || matches(removed, shop))) continue;
     const sameId = shopById(shop.id);
     if ((sameId && matches(sameId, shop)) || state.shops.some((saved) => matches(saved, shop))) continue;
     state.shops.push({ ...shop, id: sameId ? crypto.randomUUID() : shop.id });
@@ -384,15 +447,228 @@ function importShared() {
   $("#collection-title").scrollIntoView({ block: "start" });
 }
 
+function renderTrash() {
+  $("#trash-description").textContent = state.trash.length
+    ? "復元するとお店リストに戻ります。今日のデッキにはもう一度追加できます。"
+    : "ゴミ箱は空です。";
+  const items = state.trash.map((shop) => {
+    const row = element("li", "trash-item");
+    const label = element("div");
+    label.append(element("strong", "", shop.name));
+    if (shop.area) label.append(element("p", "muted", shop.area));
+    const restore = action("復元", "restore", shop.id, "button button-outline");
+    restore.setAttribute("aria-label", shop.name + "を復元");
+    row.append(label, restore);
+    return row;
+  });
+  $("#trash-list").replaceChildren(...items);
+}
+
+function restoreShop(id) {
+  const shop = state.trash.find((value) => value.id === id);
+  if (!shop) return;
+  if (!replaceStoredState({
+    ...state, shops: [shop, ...state.shops], trash: state.trash.filter((value) => value.id !== id),
+  })) {
+    $("#trash-description").textContent = "復元できませんでした。ブラウザの保存領域を確認してください。";
+    return;
+  }
+  renderHome();
+  renderTrash();
+  ($("#trash-list button") ?? $("#trash [data-close]")).focus();
+  notify("お店リストに戻しました。");
+}
+
+const importLabels = { new: "新規", existing: "既存", review: "要確認", invalid: "対象外", removed: "ゴミ箱" };
+
+function mapsError(message = "") {
+  $("#maps-error").textContent = message;
+  $("#maps-error").hidden = !message;
+}
+
+function clearMapsPreview() {
+  fileRead++;
+  mapImport = null;
+  $("#maps-preview").hidden = true;
+  $("#maps-apply-missing").checked = false;
+  $("#preview-maps").disabled = false;
+  mapsError();
+}
+
+function renderMapsPreview(focusIndex) {
+  if (!mapImport) return;
+  const { plan, choices } = mapImport;
+  const counts = Object.fromEntries(Object.keys(importLabels).map((key) => [key, 0]));
+  const rows = plan.results.map(({ row, label, possible, canAdd, hasRemovedName }) => {
+    counts[label]++;
+    const item = element("li", "import-row");
+    item.append(element("span", "import-status import-status--" + label, importLabels[label]));
+    const body = element("div", "import-row-body");
+    body.append(element("strong", "", row.name || "名前のない項目"));
+    if (label === "invalid") body.append(element("p", "muted", row.reason));
+    if (label === "removed") body.append(element("p", "muted", "復元はゴミ箱からできます。"));
+    if (hasRemovedName) body.append(element("p", "muted", "同名のお店がゴミ箱にあります。"));
+    if (possible) {
+      const link = element("a", "review-map-link", "取り込む場所をマップで確認");
+      link.href = row.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      const select = element("select");
+      select.setAttribute("aria-label", (row.name || "項目") + "の取り込み方法");
+      select.dataset.rowIndex = row.index;
+      select.append(new Option("見送る", ""));
+      if (canAdd) select.append(new Option("別店舗として追加", "new"));
+      for (const candidate of possible) {
+        const hint = candidate.area || candidate.mapUrl || candidate.url || "場所の登録なし";
+        select.append(new Option(candidate.name + " に紐づける · " + hint, candidate.id));
+      }
+      select.value = choices.get(row.index) ?? "";
+      body.append(link, select);
+    }
+    item.append(body);
+    return item;
+  });
+  $("#maps-rows").replaceChildren(...rows);
+  $("#maps-rows").hidden = !rows.length;
+  const totals = Object.entries(counts).map(([key, count]) => importLabels[key] + " " + count + "件");
+  $("#maps-summary").textContent = totals.join("  ·  ");
+  $("#maps-review-help").hidden = !counts.review;
+  const showMissing = plan.missing.length > 0;
+  $("#maps-missing").hidden = !showMissing;
+  $("#maps-missing-label").textContent = "リストから外れた可能性のあるお店 " + plan.missing.length + "件";
+  $("#maps-missing-rows").replaceChildren(...plan.missing.map((shop) => element("li", "", shop.name)));
+  const remove = $("#maps-apply-missing");
+  remove.disabled = !plan.canRemoveMissing;
+  if (remove.disabled) remove.checked = false;
+  $("#maps-missing-help").textContent = plan.canRemoveMissing
+    ? "カードと今日のデッキは残ります。"
+    : "要確認・対象外の行があるため、この回はリストから外せません。";
+  $("#apply-maps").disabled = !plan.changes.size && !remove.checked;
+  $("#maps-preview").hidden = false;
+  if (focusIndex !== undefined) $("[data-row-index='" + focusIndex + "']")?.focus();
+}
+
+function refreshMapsPlan() {
+  mapImport.plan = planTakeout(mapImport.rows, state, mapImport.source, mapImport.choices);
+}
+
+$("#open-maps-import").addEventListener("click", () => {
+  $("#maps-form").reset();
+  clearMapsPreview();
+  $("#maps-suggested-sources").replaceChildren(...state.mapLists.map((name) => new Option(name)));
+  openDialog($("#maps-import"));
+});
+$("#maps-import").addEventListener("close", clearMapsPreview);
+$("#maps-file").addEventListener("change", () => {
+  clearMapsPreview();
+  const file = $("#maps-file").files[0];
+  if (file) $("#maps-source").value = file.name.replace(/\.csv$/i, "").slice(0, 120);
+});
+$("#maps-source").addEventListener("input", clearMapsPreview);
+$("#maps-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  clearMapsPreview();
+  const file = $("#maps-file").files[0];
+  const name = $("#maps-source").value.trim();
+  if (!file || !/\.csv$/i.test(file.name) || file.size > 1_048_576 || !name) {
+    mapsError("1 MBまでのCSVを選び、リスト名を入力してください。");
+    return;
+  }
+  const ticket = fileRead;
+  $("#preview-maps").disabled = true;
+  try {
+    const csv = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
+    if (ticket !== fileRead || !$("#maps-import").open) return;
+    const rows = loadTakeoutCsv(csv);
+    const current = readState();
+    Object.assign(state, current);
+    const source = state.mapLists.find((list) => normalized(list) === normalized(name)) ?? name;
+    mapImport = { rows, source, choices: new Map(), baseline: JSON.stringify(current) };
+    refreshMapsPlan();
+    renderMapsPreview();
+    $("#maps-preview-title").focus();
+  } catch (error) {
+    if (ticket === fileRead) mapsError(error instanceof TypeError ? "UTF-8のCSVを読み込めませんでした。" : error.message);
+  } finally {
+    if (ticket === fileRead) $("#preview-maps").disabled = false;
+  }
+});
+$("#maps-rows").addEventListener("change", (event) => {
+  const { rowIndex } = event.target.dataset;
+  if (rowIndex === undefined || !mapImport) return;
+  mapImport.choices.set(Number(rowIndex), event.target.value);
+  refreshMapsPlan();
+  renderMapsPreview(rowIndex);
+});
+$("#maps-apply-missing").addEventListener("change", (event) => {
+  if (mapImport) $("#apply-maps").disabled = !mapImport.plan.changes.size && !event.target.checked;
+});
+$("#apply-maps").addEventListener("click", () => {
+  if (!mapImport) return;
+  const current = readState();
+  if (JSON.stringify(current) !== mapImport.baseline) {
+    Object.assign(state, current);
+    mapImport.baseline = JSON.stringify(current);
+    mapImport.choices.clear();
+    $("#maps-apply-missing").checked = false;
+    refreshMapsPlan();
+    renderMapsPreview();
+    renderHome();
+    renderDeck();
+    mapsError("別の画面でリストが更新されました。差分を確認し直してください。");
+    return;
+  }
+  const { plan, source } = mapImport;
+  const shops = new Map(state.shops.map((shop) => [shop.id, shop]));
+  for (const [id, shop] of plan.changes) {
+    const savedId = shops.has(id) ? id : crypto.randomUUID();
+    shops.set(savedId, { ...shop, id: savedId });
+  }
+  if (plan.canRemoveMissing && $("#maps-apply-missing").checked) {
+    for (const shop of plan.missing) {
+      shops.set(shop.id, { ...shop, mapEntries: shop.mapEntries.filter((entry) => entry.source !== source) });
+    }
+  }
+  const mapLists = state.mapLists.includes(source) ? state.mapLists : [...state.mapLists, source];
+  if (!replaceStoredState({ ...state, shops: [...shops.values()], mapLists })) {
+    mapsError("ブラウザに保存できませんでした。リストは更新されていません。");
+    return;
+  }
+  resetFilters();
+  $("#maps-import").close();
+  renderHome();
+  $("#maps-list-filter").value = source;
+  renderHome();
+  renderDeck();
+  $("#collection-title").scrollIntoView({ block: "start" });
+  notify("「" + source + "」を更新しました。");
+});
+$("#open-trash").addEventListener("click", () => {
+  renderTrash();
+  openDialog($("#trash"));
+});
+
 $("#shop-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(event.currentTarget));
-  const shop = cleanShop({ ...data, id: editingId ?? crypto.randomUUID() });
+  const original = editingId ? shopById(editingId) : null;
+  const shop = cleanShop({ ...original, ...data, id: editingId ?? crypto.randomUUID() });
   if (!shop || (data.url.trim() && !shop.url)) {
     const error = $("#editor-error");
     error.textContent = !shop ? "店名を入力してください。" : "リンクは http:// または https:// ではじめてください。";
     error.hidden = false;
     event.currentTarget.elements.namedItem(!shop ? "name" : "url").focus();
+    return;
+  }
+  const place = { url: shop.url };
+  const activeMatch = state.shops.some((saved) => saved.id !== shop.id && isSameMapPlace(saved, place));
+  const trashMatch = state.trash.some((saved) => isSameMapPlace(saved, place));
+  if ((activeMatch || trashMatch) && original?.url !== shop.url) {
+    const error = $("#editor-error");
+    error.textContent = activeMatch ? "同じ店舗を登録済みです。既存のカードを使ってください。"
+      : "このお店はゴミ箱にあります。復元してください。";
+    error.hidden = false;
+    event.currentTarget.elements.namedItem("url").focus();
     return;
   }
   const currentIndex = state.shops.findIndex(({ id }) => id === editingId);
@@ -413,7 +689,20 @@ $("#draw-deck").addEventListener("click", () => drawOne("deck"));
 $("#draw-again").addEventListener("click", () => drawOne(drawSource));
 $("#share-deck").addEventListener("click", copyDeck);
 $("#import-deck").addEventListener("click", importShared);
-$("#search").addEventListener("input", renderHome);
+$("#search").addEventListener("input", () => {
+  visibleLimit = 48;
+  renderHome();
+});
+$("#maps-list-filter").addEventListener("change", () => {
+  visibleLimit = 48;
+  renderHome();
+});
+$("#show-more").addEventListener("click", () => {
+  const firstNew = visibleLimit;
+  visibleLimit += 48;
+  renderHome();
+  $("#shop-cards").children[firstNew]?.querySelector("button").focus();
+});
 $("#toggle-samples").addEventListener("click", () => {
   state.hideSamples = !state.hideSamples;
   saveState();
@@ -431,6 +720,7 @@ document.addEventListener("click", (event) => {
   }
   if (category) {
     activeCategory = category;
+    visibleLimit = 48;
     document.querySelectorAll("[data-category]").forEach((filter) => {
       filter.setAttribute("aria-pressed", String(filter === button));
     });
@@ -449,14 +739,22 @@ document.addEventListener("click", (event) => {
     $("#details").close();
     openEditor(shopById(id));
   }
+  if (command === "restore") restoreShop(id);
   if (command === "delete") {
     const shop = shopById(id);
-    if (!shop || sampleById.has(id) || !confirm("「" + shop.name + "」をお店リストから削除しますか？")) return;
-    state.shops = state.shops.filter((value) => value.id !== id);
-    state.selected = state.selected.filter((selected) => selected !== id);
+    if (!shop || sampleById.has(id) || !confirm("「" + shop.name + "」をゴミ箱に移しますか？ 今日のデッキからも外れます。")) return;
+    if (!replaceStoredState({
+      ...state,
+      shops: state.shops.filter((value) => value.id !== id),
+      selected: state.selected.filter((selected) => selected !== id),
+      trash: [shop, ...state.trash],
+    })) {
+      notify("ゴミ箱へ移せませんでした。ブラウザの保存領域を確認してください。");
+      return;
+    }
     $("#details").close();
     if ($("#draw").open && drawnId === id) $("#draw").close();
-    saveState("お店を削除しました。");
+    notify("ゴミ箱に移しました。");
     renderHome();
     renderDeck();
   }

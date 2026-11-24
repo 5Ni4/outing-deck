@@ -64,6 +64,7 @@
           <div class="actions hero-actions">
             <button id="add-shop" class="button button-primary" type="button"><svg class="icon"><use href="#i-plus"/></svg> お店を追加</button>
             <button id="shuffle" class="button button-outline" type="button"><svg class="icon"><use href="#i-shuffle"/></svg> 1枚引く</button>
+            <button id="open-maps-import" class="button button-outline" type="button"><svg class="icon"><use href="#i-pin"/></svg> マップから取り込む</button>
           </div>
         </div>
         <div class="hero-art">
@@ -76,7 +77,10 @@
             <h2 id="collection-title">お店リスト</h2>
             <span class="shop-total" id="shop-total"></span>
           </div>
-          <button id="toggle-samples" type="button" class="text-button">サンプルを隠す</button>
+          <div class="collection-actions">
+            <button id="toggle-samples" type="button" class="text-button">サンプルを隠す</button>
+            <button id="open-trash" type="button" class="text-button">ゴミ箱</button>
+          </div>
         </div>
         <div class="toolbar">
           <div class="filters" aria-label="ジャンルで絞り込む">
@@ -84,13 +88,18 @@
             <button class="filter" type="button" data-category="cafe" aria-pressed="false"><svg class="icon"><use href="#i-cafe"/></svg> カフェ</button>
             <button class="filter" type="button" data-category="food" aria-pressed="false"><svg class="icon"><use href="#i-food"/></svg> ごはん</button>
             <button class="filter" type="button" data-category="sweet" aria-pressed="false"><svg class="icon"><use href="#i-sweet"/></svg> スイーツ</button>
+            <button class="filter" type="button" data-category="other" aria-pressed="false" hidden><svg class="icon"><use href="#i-pin"/></svg> 未分類</button>
           </div>
-          <label class="search">
-            <svg class="icon"><use href="#i-search"/></svg><input type="search" id="search" aria-label="店名やエリアで検索" placeholder="店名やエリアで検索">
-          </label>
+          <div class="search-controls">
+            <select id="maps-list-filter" aria-label="保存済みリストで絞り込む" hidden></select>
+            <label class="search">
+              <svg class="icon"><use href="#i-search"/></svg><input type="search" id="search" aria-label="店名やエリアで検索" placeholder="店名やエリアで検索">
+            </label>
+          </div>
         </div>
         <div class="card-grid" id="shop-cards"></div>
         <div class="empty" id="empty-list" hidden></div>
+        <button class="button button-outline" id="show-more" type="button" hidden>もっと表示</button>
       </section>
     </div>
   </main>
@@ -101,9 +110,9 @@
         <h2 id="editor-title">お店を追加</h2>
         <button class="icon-button" type="button" data-close aria-label="閉じる"><svg class="icon"><use href="#i-close"/></svg></button>
       </div>
-      <label>店名 <span class="required">必須</span><input name="name" required maxlength="80" placeholder="例　喫茶ひだまり"></label>
+      <label>店名 <span class="required">必須</span><input name="name" required maxlength="256" placeholder="例　喫茶ひだまり"></label>
       <div class="form-row">
-        <label>ジャンル<select name="category"><option value="cafe">カフェ</option><option value="food">ごはん</option><option value="sweet">スイーツ</option></select></label>
+        <label>ジャンル<select name="category"><option value="cafe">カフェ</option><option value="food">ごはん</option><option value="sweet">スイーツ</option><option value="other">未分類</option></select></label>
         <label>エリア<input name="area" maxlength="50" placeholder="例　京都・河原町"></label>
       </div>
       <label>お店のリンク<input name="url" type="url" maxlength="600" placeholder="Google マップや公式サイトのURL"></label>
@@ -148,6 +157,47 @@
     <div class="dialog-actions">
       <button id="draw-again" class="button button-outline" type="button"><svg class="icon"><use href="#i-shuffle"/></svg> もう1枚引く</button>
     </div>
+  </dialog>
+  <dialog id="maps-import" class="dialog maps-dialog" aria-labelledby="maps-import-title">
+    <div class="dialog-heading">
+      <h2 id="maps-import-title">保存済みリストを取り込む</h2>
+      <button class="icon-button" type="button" data-close aria-label="閉じる"><svg class="icon"><use href="#i-close"/></svg></button>
+    </div>
+    <form id="maps-form">
+      <p class="muted"><a href="https://takeout.google.com/" target="_blank" rel="noopener noreferrer">Google Takeout</a> の「保存済み」を書き出し、ZIPを解凍して、使いたいリストのCSVを選んでください。</p>
+      <div class="import-fields">
+        <label>リストのCSV<input id="maps-file" type="file" accept=".csv,text/csv" required></label>
+        <label>リスト名<input id="maps-source" type="text" maxlength="120" required list="maps-suggested-sources" aria-describedby="maps-source-help"></label>
+        <datalist id="maps-suggested-sources"></datalist>
+      </div>
+      <p class="muted import-hint" id="maps-source-help">再取り込みでは、最初と同じリスト名を使います。CSVはこのブラウザ内で読み取ります。</p>
+      <div class="dialog-actions import-preview-actions">
+        <button class="button button-outline" id="preview-maps" type="submit">差分を確認</button>
+      </div>
+    </form>
+    <section id="maps-preview" aria-labelledby="maps-preview-title" hidden>
+      <h3 id="maps-preview-title" tabindex="-1">取り込み内容</h3>
+      <p class="muted" id="maps-summary" aria-live="polite"></p>
+      <p id="maps-review-help" class="muted" hidden>同名や候補が複数の店があります。選ばなかった行は見送ります。</p>
+      <ul class="import-rows" id="maps-rows"></ul>
+      <div id="maps-missing" hidden>
+        <details><summary id="maps-missing-label"></summary><ul id="maps-missing-rows"></ul></details>
+        <label class="checkbox-row"><input id="maps-apply-missing" type="checkbox"> 今回見つからなかったお店をこのリストから外す</label>
+        <p class="muted" id="maps-missing-help"></p>
+      </div>
+      <div class="dialog-actions">
+        <button class="button button-primary" id="apply-maps" type="button">取り込みを保存</button>
+      </div>
+    </section>
+    <p class="form-error" id="maps-error" role="alert" hidden></p>
+  </dialog>
+  <dialog id="trash" class="dialog" aria-labelledby="trash-title">
+    <div class="dialog-heading">
+      <h2 id="trash-title">ゴミ箱</h2>
+      <button class="icon-button" type="button" data-close aria-label="閉じる"><svg class="icon"><use href="#i-close"/></svg></button>
+    </div>
+    <p id="trash-description" class="muted"></p>
+    <ul id="trash-list" class="deck-list"></ul>
   </dialog>
   <p class="toast" id="toast" role="status" aria-live="polite"></p>
 </body>
