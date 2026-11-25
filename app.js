@@ -1,4 +1,5 @@
 import { isSameMapPlace, loadTakeoutCsv, mapLink, normalized, planTakeout } from "./maps-import.mjs";
+import { cardAppearance } from "./card-photos.mjs";
 
 const $ = (selector) => document.querySelector(selector);
 const categories = { cafe: "カフェ", food: "ごはん", sweet: "スイーツ", other: "未分類" };
@@ -147,28 +148,35 @@ function filteredShops() {
   const words = normal($("#search").value.trim()).split(/\s+/);
   const source = $("#maps-list-filter").value;
   return shops.filter((shop) => {
-    const searchable = normal([shop.name, shop.area, shop.note, categories[shop.category]].join(" "));
-    return (activeCategory === "all" || shop.category === activeCategory)
-      && (!source || shop.mapEntries?.some((entry) => entry.source === source))
-      && words.every((word) => searchable.includes(word));
+    if (source && !shop.mapEntries?.some((entry) => entry.source === source)) return false;
+    const { category } = cardAppearance(shop, source);
+    if (activeCategory !== "all" && category !== activeCategory) return false;
+    const lists = shop.mapEntries?.map((entry) => entry.source) ?? [];
+    const searchable = normal([shop.name, shop.area, shop.note, categories[category], ...lists].join(" "));
+    return words.every((word) => searchable.includes(word));
   });
 }
 
-function photo(shop) {
-  const frame = element("div", "card-photo card-photo--" + shop.category);
-  if (sampleById.has(shop.id)) {
-    const image = element("img");
-    image.src = "./assets/" + shop.category + ".webp";
-    image.alt = "";
-    image.width = 640;
-    image.height = 426;
-    frame.append(image, element("span", "sample-label", "サンプル"));
-  } else {
-    frame.append(icon(shop.category === "other" ? "pin" : shop.category));
-  }
+function photo(shop, { list = "", eager = false } = {}) {
+  const appearance = cardAppearance(shop, list);
+  const frame = element("div", "card-photo card-photo--" + appearance.category);
+  const symbol = appearance.category === "other" ? "pin" : appearance.category;
+  const isSample = sampleById.has(shop.id);
+  const image = element("img");
+  image.loading = eager || isSample ? "eager" : "lazy";
+  image.decoding = "async";
+  image.alt = "";
+  image.width = 640;
+  image.height = 426;
+  image.addEventListener("error", () => image.remove(), { once: true });
+  image.src = appearance.src;
   const category = element("span", "category-pill");
-  category.append(icon(shop.category === "other" ? "pin" : shop.category), categories[shop.category]);
-  frame.append(category);
+  const label = appearance.list || categories[appearance.category];
+  category.title = label;
+  category.append(icon(symbol), element("span", "category-pill-label", label));
+  const labels = element("div", "card-labels");
+  labels.append(category, element("span", "sample-label", isSample ? "サンプル" : "イメージ写真"));
+  frame.append(icon(symbol), image, labels);
   return frame;
 }
 
@@ -185,7 +193,7 @@ function pickButton(shop) {
   return button;
 }
 
-function shopCard(shop, mode = "local") {
+function shopCard(shop, { mode = "local", list = "", eager = false } = {}) {
   const card = element("article", "shop-card");
   const body = element("div", "card-body");
   if (shop.area) body.append(areaLabel(shop.area));
@@ -195,7 +203,7 @@ function shopCard(shop, mode = "local") {
   actions.append(action("詳細を見る", mode === "shared" ? "shared-details" : "details", shop.id, "text-button"));
   if (mode === "local") actions.append(pickButton(shop));
   body.append(actions);
-  card.append(photo(shop), body);
+  card.append(photo(shop, { list, eager }), body);
   return card;
 }
 
@@ -208,11 +216,14 @@ function renderHome() {
     listFilter.value = state.mapLists.includes(previousSource) ? previousSource : "";
   }
   listFilter.hidden = state.mapLists.length === 0;
-  $('[data-category="other"]').hidden = activeCategory !== "other" && !state.shops.some((shop) => shop.category === "other");
+  $('[data-category="other"]').hidden = activeCategory !== "other"
+    && !state.shops.some((shop) => cardAppearance(shop, listFilter.value).category === "other");
   const visible = filteredShops();
   $("#shop-total").textContent = visible.length + "件";
   $("#toggle-samples").textContent = state.hideSamples ? "サンプルを表示" : "サンプルを隠す";
-  $("#shop-cards").replaceChildren(...visible.slice(0, visibleLimit).map((shop) => shopCard(shop)));
+  $("#shop-cards").replaceChildren(...visible.slice(0, visibleLimit).map((shop, index) =>
+    shopCard(shop, { list: listFilter.value, eager: index < 3 }),
+  ));
   $("#show-more").hidden = visible.length <= visibleLimit;
   const empty = $("#empty-list");
   empty.hidden = visible.length !== 0;
@@ -236,11 +247,12 @@ function renderDeck() {
   const nodes = shops.map((shop) => {
     const item = element("li", "deck-item");
     const label = element("div");
+    const appearance = cardAppearance(shop);
     label.append(element("strong", "", shop.name));
-    label.append(element("small", "", [categories[shop.category], shop.area].filter(Boolean).join(" · ")));
+    label.append(element("small", "", [appearance.list || categories[appearance.category], shop.area].filter(Boolean).join(" · ")));
     const remove = action("", "remove-pick", shop.id, "icon-button", "close");
     remove.setAttribute("aria-label", shop.name + "をデッキから外す");
-    item.append(icon(shop.category === "other" ? "pin" : shop.category), label, remove);
+    item.append(icon(appearance.category === "other" ? "pin" : appearance.category), label, remove);
     return item;
   });
   $("#deck-list").replaceChildren(...nodes);
@@ -253,7 +265,7 @@ function renderDeck() {
 function renderDraw() {
   const shop = shopById(drawnId);
   if (!shop) return;
-  $("#draw-content").replaceChildren(shopCard(shop));
+  $("#draw-content").replaceChildren(shopCard(shop, { list: $("#maps-list-filter").value, eager: true }));
 }
 
 function openDialog(dialog) {
@@ -289,7 +301,7 @@ function openDetails(shop, fromShare) {
   $("#details-title").textContent = shop.name;
   const content = $("#details-content");
   const isSample = sampleById.has(shop.id);
-  content.replaceChildren(photo(shop));
+  content.replaceChildren(photo(shop, { list: fromShare ? "" : $("#maps-list-filter").value, eager: true }));
   if (shop.area) content.append(areaLabel(shop.area));
   if (shop.note) content.append(element("p", "card-note", shop.note));
   if (!fromShare && shop.mapEntries?.length) {
@@ -418,7 +430,9 @@ function showLocation() {
   $("#home-view").hidden = wantsShare;
   $("#shared-count").textContent = shared ? shared.length + "件のお店が候補に入っています。" : "共有リンクが無効か、途中で切れています。";
   $("#import-deck").hidden = !shared;
-  $("#shared-cards").replaceChildren(...(shared ?? []).map((shop) => shopCard(shop, "shared")));
+  $("#shared-cards").replaceChildren(...(shared ?? []).map((shop, index) =>
+    shopCard(shop, { mode: "shared", eager: index < 3 }),
+  ));
   if (!wantsShare) renderHome();
 }
 

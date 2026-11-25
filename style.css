@@ -74,9 +74,11 @@ h1, h2, h3, p { margin: 0; }
 .card-photo--food { background: #f5dec2; color: #7c4a26; }
 .card-photo--sweet { background: #f2dcd9; color: #884951; }
 .card-photo > .icon { opacity: .9; width: 46px; height: 46px; stroke-width: 1.1; }
-.category-pill { display: inline-flex; align-items: center; gap: 5px; position: absolute; top: 12px; left: 12px; padding: 5px 10px; border-radius: 40px; background: var(--white); color: var(--ink); font-size: .8125rem; font-weight: 750; }
-.category-pill .icon { width: 14px; height: 14px; }
-.sample-label { position: absolute; top: 12px; right: 12px; padding: 4px 8px; background: #263d2de8; color: white; border-radius: 5px; font-size: .75rem; }
+.card-labels { position: absolute; top: 12px; inset-inline: 12px; display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.category-pill { display: inline-flex; align-items: center; gap: 5px; min-width: 0; padding: 5px 10px; border-radius: 40px; background: var(--white); color: var(--ink); font-size: .8125rem; font-weight: 750; }
+.category-pill .icon { flex: none; width: 14px; height: 14px; }
+.category-pill-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sample-label { flex: none; padding: 4px 8px; background: #263d2de8; color: white; border-radius: 5px; font-size: .75rem; }
 .card-body { display: flex; flex: 1; flex-direction: column; padding: 15px 16px 16px; }
 .card-area, .card-note { font-size: .85rem; color: var(--muted); line-height: 1.55; overflow-wrap: anywhere; }
 .card-area { display: flex; align-items: center; gap: 4px; min-height: 21px; }
