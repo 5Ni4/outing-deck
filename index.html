@@ -9,8 +9,8 @@
   <meta property="og:description" content="カフェとごはんの候補を集めて、今日行くお店を決めよう。">
   <link rel="icon" href="./assets/icon.svg" type="image/svg+xml">
   <link rel="preload" href="./assets/hero.webp" as="image">
-  <link rel="stylesheet" href="./style.css?v=2">
-  <script type="module" src="./app.js?v=2"></script>
+  <link rel="stylesheet" href="./style.css?v=3">
+  <script type="module" src="./app.js?v=3"></script>
   <title>おでかけデッキ</title>
 </head>
 <body>
@@ -28,6 +28,7 @@
     <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
     <symbol id="i-link" viewBox="0 0 24 24"><path d="m9.5 14.5 5-5m-7 7-1 1a3.5 3.5 0 0 1-5-5l4-4a3.5 3.5 0 0 1 5 0m6 0 1-1a3.5 3.5 0 0 0-5-5l-4 4" transform="translate(2 2)"/></symbol>
     <symbol id="i-edit" viewBox="0 0 24 24"><path d="m14.5 5.5 4 4M4 20l4.5-1 11-11a2.8 2.8 0 0 0-4-4l-11 11L4 20Z"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.6l6.2-.9L12 3Z"/></symbol>
   </svg>
   <header class="site-header">
     <div class="container header-inner">
@@ -44,8 +45,8 @@
     <div id="shared-view" hidden>
       <section class="shared-head">
         <div>
-          <p class="eyebrow"><svg class="icon"><use href="#i-deck"/></svg> SHARED DECK</p>
-          <h1>友だちからのデッキ</h1>
+          <p class="eyebrow" id="shared-deck-label"><svg class="icon"><use href="#i-deck"/></svg> SHARED DECK</p>
+          <h1 id="shared-title">友だちからのデッキ</h1>
           <p id="shared-count" class="muted"></p>
         </div>
         <div class="actions">
@@ -55,6 +56,30 @@
       </section>
       <div class="card-grid" id="shared-cards"></div>
     </div>
+    <section id="recommendations-view" aria-labelledby="recommendations-title" hidden>
+      <div class="shared-head">
+        <div>
+          <h1 id="recommendations-title" tabindex="-1">わたしのおすすめ</h1>
+          <p class="muted" id="recommendations-count"></p>
+        </div>
+        <a class="button button-outline" href="./#collection-title">お店リストに戻る</a>
+      </div>
+      <div id="recommendation-share" class="recommendation-share" hidden>
+        <div class="actions">
+          <button class="button button-primary" id="share-recommendations" type="button" disabled><svg class="icon"><use href="#i-link"/></svg> 選んだおすすめを共有</button>
+          <p class="muted" id="recommendation-share-count" aria-live="polite"></p>
+        </div>
+        <div class="share-box" id="recommendation-share-box" hidden>
+          <p id="recommendation-share-note" class="muted" aria-live="polite"></p>
+          <label for="recommendation-share-url" class="visually-hidden">おすすめの共有リンク</label>
+          <input id="recommendation-share-url" type="url" readonly aria-describedby="recommendation-share-note">
+        </div>
+      </div>
+      <div id="recommendation-cards" class="card-grid"></div>
+      <div class="empty" id="recommendations-empty">
+        <p>お店の詳細で「おすすめに追加」を押すと、ここに並びます。</p>
+      </div>
+    </section>
     <div id="home-view">
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-copy">
@@ -78,6 +103,7 @@
             <span class="shop-total" id="shop-total"></span>
           </div>
           <div class="collection-actions">
+            <a href="#recommendations" class="button button-outline"><svg class="icon"><use href="#i-star"/></svg> わたしのおすすめ</a>
             <button id="toggle-samples" type="button" class="text-button">サンプルを隠す</button>
             <button id="open-trash" type="button" class="text-button">ゴミ箱</button>
           </div>
@@ -147,6 +173,23 @@
       <button class="icon-button" type="button" data-close aria-label="閉じる"><svg class="icon"><use href="#i-close"/></svg></button>
     </div>
     <div id="details-content"></div>
+  </dialog>
+  <dialog id="recommendation-editor" class="dialog" aria-labelledby="recommendation-editor-title">
+    <form id="recommendation-form">
+      <div class="dialog-heading">
+        <h2 id="recommendation-editor-title">おすすめに追加</h2>
+        <button class="icon-button" type="button" data-close aria-label="閉じる"><svg class="icon"><use href="#i-close"/></svg></button>
+      </div>
+      <p id="recommendation-shop-name"></p>
+      <label for="recommendation-reason">おすすめの一言（任意）</label>
+      <textarea id="recommendation-reason" rows="3" maxlength="120" placeholder="プリンがおいしくて、ゆっくり話せる" aria-describedby="recommendation-visibility"></textarea>
+      <p class="muted" id="recommendation-visibility">このお店を共有すると、友だちにも一言が表示されます。</p>
+      <p id="recommendation-error" class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="text-button danger-button" type="button" id="remove-recommendation" hidden>おすすめから外す</button>
+        <button class="button button-primary" type="submit" id="save-recommendation">追加する</button>
+      </div>
+    </form>
   </dialog>
   <dialog id="draw" class="dialog" aria-labelledby="draw-title">
     <div class="dialog-heading">

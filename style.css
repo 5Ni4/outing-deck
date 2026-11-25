@@ -102,10 +102,10 @@ body:has(dialog[open]) { overflow: hidden; }
 .dialog-heading h2 { overflow-wrap: anywhere; }
 .icon-button { display: grid; place-items: center; flex-shrink: 0; width: 39px; height: 39px; border: 1px solid var(--line); border-radius: 11px; background: var(--white); color: var(--ink); }
 .icon-button:hover { background: #ecefe3; }
-#shop-form label, .form-row label { display: block; font-size: .875rem; font-weight: 700; margin-top: 12px; }
+#shop-form label, .form-row label, #recommendation-form label { display: block; font-size: .875rem; font-weight: 700; margin-top: 12px; }
 .required { color: #993a24; font-size: .75rem; margin-left: 3px; }
-#shop-form :is(input, select, textarea), #share-url { margin-top: 5px; display: block; width: 100%; min-width: 0; min-height: 42px; border: 1px solid #cdd4c5; border-radius: 9px; padding: 9px 10px; background: white; color: var(--ink); font-size: 1rem; font-weight: 450; }
-#shop-form textarea { resize: vertical; }
+#shop-form :is(input, select, textarea), .share-box input, #recommendation-reason { margin-top: 5px; display: block; width: 100%; min-width: 0; min-height: 42px; border: 1px solid #cdd4c5; border-radius: 9px; padding: 9px 10px; background: white; color: var(--ink); font-size: 1rem; font-weight: 450; }
+#shop-form textarea, #recommendation-reason { resize: vertical; }
 .form-row { display: grid; grid-template-columns: 1fr 1.4fr; gap: 12px; }
 .form-error { margin-top: 8px; color: #9b3023; font-size: .875rem; }
 .dialog-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; flex-wrap: wrap; margin-top: 17px; }
@@ -119,6 +119,14 @@ body:has(dialog[open]) { overflow: hidden; }
 .danger-button { color: #a23829; margin-right: auto; }
 #details-content .card-note { margin-top: 10px; padding-bottom: 0; }
 #details-content .card-area { margin-top: 12px; }
+.recommendation-share { margin-bottom: 18px; }
+.recommendation-choice { display: inline-flex; align-items: center; gap: 7px; min-height: 37px; cursor: pointer; color: var(--ink); font-size: .875rem; font-weight: 700; }
+.recommendation-choice input { width: 17px; height: 17px; margin: 0; accent-color: var(--green); }
+.recommendation-summary { margin-top: 14px; }
+.recommendation-summary strong { display: block; font-size: .875rem; }
+#details-content .recommendation-summary .card-note { margin: 3px 0 9px; }
+#recommendation-shop-name { font-weight: 750; overflow-wrap: anywhere; }
+#recommendation-visibility { margin-top: 6px; }
 .toast { position: fixed; bottom: max(16px, env(safe-area-inset-bottom)); left: 50%; z-index: 9; width: max-content; max-width: calc(100vw - 30px); transform: translate(-50%, 20px); opacity: 0; pointer-events: none; background: var(--green); color: white; border-radius: 12px; padding: 11px 16px; font-size: .9rem; transition: transform .18s, opacity .18s; box-shadow: 0 4px 20px #20362a26; }
 .toast.visible { opacity: 1; transform: translate(-50%, 0); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }

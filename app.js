@@ -11,12 +11,17 @@ const samples = [
 const sampleById = new Map(samples.map((shop) => [shop.id, shop]));
 const storageKey = "outing-deck:v1";
 const sharePrefix = "#deck=";
+const recommendationsHash = "#recommendations";
+const recommendationSharePrefix = "#recommended=";
 const maximumTokenLength = 7500;
 
 const state = readState();
+const recommendationSelection = new Set();
 let activeCategory = "all";
 let visibleLimit = 48;
 let editingId = null;
+let recommendationEditorId = null;
+let originalRecommendation;
 let drawnId = null;
 let shared = null;
 let toastTimer;
@@ -55,6 +60,7 @@ function cleanShop(value) {
     id, name, category: value.category,
     area: cleaned(value.area, 50),
     note: cleaned(value.note, 140),
+    ...(typeof value.recommendation === "string" ? { recommendation: cleaned(value.recommendation, 120) } : {}),
     url: safeUrl(value.url),
     mapUrl: mapLink(value.mapUrl),
     mapEntries,
@@ -185,10 +191,21 @@ function shopCard(shop, { mode = "local", list = "" } = {}) {
   const body = element("div", "card-body");
   body.append(cardBadges(shop, list), element("h3", "", shop.name));
   if (shop.area) body.append(areaLabel(shop.area));
-  if (shop.note) body.append(element("p", "card-note", shop.note));
+  const note = mode === "recommendation" ? shop.recommendation : shop.note;
+  if (note) body.append(element("p", "card-note", note));
   const actions = element("div", "card-actions");
   actions.append(action("詳細を見る", mode === "shared" ? "shared-details" : "details", shop.id, "text-button"));
   if (mode === "local") actions.append(pickButton(shop));
+  if (mode === "recommendation") {
+    const label = element("label", "recommendation-choice");
+    const checkbox = element("input");
+    checkbox.type = "checkbox";
+    checkbox.value = shop.id;
+    checkbox.checked = recommendationSelection.has(shop.id);
+    checkbox.setAttribute("aria-label", shop.name + "を共有する");
+    label.append(checkbox, "共有する");
+    actions.append(label);
+  }
   body.append(actions);
   card.append(body);
   return card;
@@ -247,6 +264,28 @@ function renderDeck() {
   $("#share-deck").disabled = shops.length === 0;
   $("#share-box").hidden = true;
   $("#share-note").textContent = "リンクを知っている人に、選んだお店の情報とメモが表示されます。";
+}
+
+function updateRecommendationShare() {
+  const count = recommendationSelection.size;
+  $("#share-recommendations").disabled = count === 0;
+  $("#recommendation-share-count").textContent = count ? count + "件を選択中" : "共有するお店にチェックを入れてください。";
+  $("#recommendation-share-box").hidden = true;
+  $("#recommendation-share-url").value = "";
+}
+
+function renderRecommendations() {
+  if ($("#recommendations-view").hidden) return;
+  const shops = state.shops.filter((shop) => shop.recommendation !== undefined);
+  const ids = new Set(shops.map((shop) => shop.id));
+  for (const selected of recommendationSelection) {
+    if (!ids.has(selected)) recommendationSelection.delete(selected);
+  }
+  $("#recommendations-count").textContent = shops.length ? shops.length + "件" : "";
+  $("#recommendations-empty").hidden = shops.length !== 0;
+  $("#recommendation-share").hidden = shops.length === 0;
+  $("#recommendation-cards").replaceChildren(...shops.map((shop) => shopCard(shop, { mode: "recommendation" })));
+  updateRecommendationShare();
 }
 
 function renderDraw() {
@@ -309,6 +348,13 @@ function openDetails(shop, fromShare) {
 
   const actions = element("div", "dialog-actions");
   if (!isSample && !fromShare) {
+    const recommended = shop.recommendation !== undefined;
+    const recommendation = element("div", "recommendation-summary");
+    if (shop.recommendation) {
+      recommendation.append(element("strong", "", "おすすめの一言"), element("p", "card-note", shop.recommendation));
+    }
+    recommendation.append(action(recommended ? "おすすめを編集" : "おすすめに追加", "recommend", shop.id, "button button-outline", "star"));
+    content.append(recommendation);
     actions.append(action("削除", "delete", shop.id, "text-button danger-button"));
     actions.append(action("編集", "edit", shop.id, "button button-outline", "edit"));
   }
@@ -328,6 +374,46 @@ function openDetails(shop, fromShare) {
   }
   content.append(actions);
   openDialog($("#details"));
+}
+
+function openRecommendationEditor(shop) {
+  if (!shop || sampleById.has(shop.id)) return;
+  recommendationEditorId = shop.id;
+  originalRecommendation = shop.recommendation;
+  const isEdit = originalRecommendation !== undefined;
+  $("#recommendation-editor-title").textContent = isEdit ? "おすすめを編集" : "おすすめに追加";
+  $("#recommendation-shop-name").textContent = shop.name;
+  $("#recommendation-reason").value = originalRecommendation ?? "";
+  $("#recommendation-error").hidden = true;
+  $("#remove-recommendation").hidden = !isEdit;
+  $("#save-recommendation").textContent = isEdit ? "保存する" : "追加する";
+  openDialog($("#recommendation-editor"));
+  $("#recommendation-reason").focus();
+}
+
+function saveRecommendation(reason) {
+  const current = readState();
+  const shop = current.shops.find(({ id }) => id === recommendationEditorId);
+  const error = $("#recommendation-error");
+  if (!shop || shop.recommendation !== originalRecommendation) {
+    error.textContent = "別の画面でお店またはおすすめが更新されました。ページを再読み込みしてからお試しください。";
+    error.hidden = false;
+    return;
+  }
+  const updated = { ...shop };
+  if (reason === undefined) delete updated.recommendation;
+  else updated.recommendation = reason;
+  if (!replaceStoredState({ ...current, shops: current.shops.map((value) => value.id === shop.id ? updated : value) })) {
+    error.textContent = "ブラウザに保存できませんでした。おすすめは更新されていません。";
+    error.hidden = false;
+    return;
+  }
+  if (reason === undefined) recommendationSelection.delete(shop.id);
+  $("#recommendation-editor").close();
+  renderRecommendations();
+  openDetails(updated, false);
+  $("#details-content [data-action=recommend]").focus();
+  notify(reason === undefined ? "おすすめから外しました。" : "おすすめを保存しました。");
 }
 
 function togglePick(id) {
@@ -383,13 +469,12 @@ function decodeDeck(token) {
   }
 }
 
-async function copyDeck() {
-  const shops = deckShops();
+async function copyShopLink(shops, prefix, box, contentLabel) {
   if (!shops.length) return;
   const token = encodeDeck(shops);
-  const note = $("#share-note");
-  const input = $("#share-url");
-  $("#share-box").hidden = false;
+  const note = box.querySelector("p");
+  const input = box.querySelector("input");
+  box.hidden = false;
   input.hidden = token.length > maximumTokenLength;
   if (input.hidden) {
     note.textContent = "共有リンクが長すぎます。候補を減らしてからもう一度お試しください。";
@@ -398,28 +483,54 @@ async function copyDeck() {
 
   const url = new URL(location.href);
   url.search = "";
-  url.hash = sharePrefix + token;
+  url.hash = prefix + token;
   input.value = url.href;
   try {
     await navigator.clipboard.writeText(url.href);
-    note.textContent = "コピーしました。選んだお店の情報とメモがリンク先に表示されます。";
+    note.textContent = "コピーしました。選んだお店の情報と" + contentLabel + "がリンク先に表示されます。";
   } catch {
     input.focus();
     input.select();
-    note.textContent = "選択したリンクをコピーして送ってください。お店の情報とメモが表示されます。";
+    note.textContent = "選択したリンクをコピーして送ってください。お店の情報と" + contentLabel + "が表示されます。";
   }
+}
+
+function copyDeck() {
+  return copyShopLink(deckShops(), sharePrefix, $("#share-box"), "メモ");
+}
+
+function copyRecommendations() {
+  const shops = state.shops.filter((shop) => shop.recommendation !== undefined && recommendationSelection.has(shop.id))
+    .map((shop) => ({
+      id: shop.id, name: shop.name, area: shop.area, category: cardCategory(shop).category,
+      note: shop.recommendation, url: "", mapUrl: shop.mapUrl || mapLink(shop.url),
+    }));
+  return copyShopLink(shops, recommendationSharePrefix, $("#recommendation-share-box"), "おすすめの一言");
 }
 
 function showLocation() {
   document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
-  const wantsShare = location.hash.startsWith(sharePrefix);
-  shared = wantsShare ? decodeDeck(location.hash.slice(sharePrefix.length)) : null;
+  const isRecommendations = location.hash === recommendationsHash;
+  const isRecommendationShare = location.hash.startsWith(recommendationSharePrefix);
+  const prefix = isRecommendationShare ? recommendationSharePrefix : sharePrefix;
+  const wantsShare = location.hash.startsWith(prefix);
+  shared = wantsShare ? decodeDeck(location.hash.slice(prefix.length)) : null;
+  $("#recommendations-view").hidden = !isRecommendations;
   $("#shared-view").hidden = !wantsShare;
-  $("#home-view").hidden = wantsShare;
-  $("#shared-count").textContent = shared ? shared.length + "件のお店が候補に入っています。" : "共有リンクが無効か、途中で切れています。";
-  $("#import-deck").hidden = !shared;
+  $("#home-view").hidden = wantsShare || isRecommendations;
+  $("#shared-deck-label").hidden = isRecommendationShare;
+  $("#shared-title").textContent = isRecommendationShare ? "おすすめのお店" : "友だちからのデッキ";
+  const countLabel = isRecommendationShare ? "件のお店が紹介されています。" : "件のお店が候補に入っています。";
+  $("#shared-count").textContent = shared ? shared.length + countLabel : "共有リンクが無効か、途中で切れています。";
+  $("#import-deck").hidden = !shared || isRecommendationShare;
   $("#shared-cards").replaceChildren(...(shared ?? []).map((shop) => shopCard(shop, { mode: "shared" })));
-  if (!wantsShare) renderHome();
+  if (isRecommendations) {
+    renderRecommendations();
+    $("#recommendations-title").focus();
+  } else if (!wantsShare) {
+    renderHome();
+    if (location.hash === "#collection-title") $("#collection-title").scrollIntoView({ block: "start" });
+  }
 }
 
 function importShared() {
@@ -474,6 +585,7 @@ function restoreShop(id) {
     return;
   }
   renderHome();
+  renderRecommendations();
   renderTrash();
   ($("#trash-list button") ?? $("#trash [data-close]")).focus();
   notify("お店リストに戻しました。");
@@ -679,9 +791,24 @@ $("#shop-form").addEventListener("submit", (event) => {
   $("#editor").close();
   renderHome();
   renderDeck();
+  renderRecommendations();
   if ($("#draw").open) renderDraw();
 });
 
+$("#recommendation-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveRecommendation(cleaned($("#recommendation-reason").value, 120));
+});
+$("#remove-recommendation").addEventListener("click", () => {
+  if (confirm("おすすめから外しますか？ おすすめの一言も削除されます。")) saveRecommendation();
+});
+$("#recommendation-cards").addEventListener("change", (event) => {
+  const checkbox = event.target;
+  if (checkbox.checked) recommendationSelection.add(checkbox.value);
+  else recommendationSelection.delete(checkbox.value);
+  updateRecommendationShare();
+});
+$("#share-recommendations").addEventListener("click", copyRecommendations);
 $("#add-shop").addEventListener("click", () => openEditor());
 $("#open-deck").addEventListener("click", () => openDialog($("#deck")));
 $("#shuffle").addEventListener("click", () => drawOne("list"));
@@ -735,6 +862,7 @@ document.addEventListener("click", (event) => {
   if (command === "add") openEditor();
   if (command === "details") openDetails(shopById(id), false);
   if (command === "shared-details") openDetails(shared?.find((shop) => shop.id === id), true);
+  if (command === "recommend") openRecommendationEditor(shopById(id));
   if (command === "edit") {
     $("#details").close();
     openEditor(shopById(id));
@@ -742,7 +870,9 @@ document.addEventListener("click", (event) => {
   if (command === "restore") restoreShop(id);
   if (command === "delete") {
     const shop = shopById(id);
-    if (!shop || sampleById.has(id) || !confirm("「" + shop.name + "」をゴミ箱に移しますか？ 今日のデッキからも外れます。")) return;
+    if (!shop || sampleById.has(id)) return;
+    const lists = shop.recommendation === undefined ? "今日のデッキ" : "今日のデッキとおすすめ";
+    if (!confirm("「" + shop.name + "」をゴミ箱に移しますか？ " + lists + "からも外れます。")) return;
     if (!replaceStoredState({
       ...state,
       shops: state.shops.filter((value) => value.id !== id),
@@ -752,11 +882,13 @@ document.addEventListener("click", (event) => {
       notify("ゴミ箱へ移せませんでした。ブラウザの保存領域を確認してください。");
       return;
     }
+    recommendationSelection.delete(id);
     $("#details").close();
     if ($("#draw").open && drawnId === id) $("#draw").close();
     notify("ゴミ箱に移しました。");
     renderHome();
     renderDeck();
+    renderRecommendations();
   }
   if (command === "pick" || command === "remove-pick") {
     const context = button.closest("#draw") ?? button.closest("#deck") ?? $("#shop-cards");
